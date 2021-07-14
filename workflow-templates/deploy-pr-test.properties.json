@@ -1,0 +1,11 @@
+{
+    "name": "Deploy repo PR test",
+    "description": "Pull Request KinD tests for deploy repos workflow template.",
+    "iconName": "blank",
+    "categories": [
+        "deploy"
+    ],
+    "filePatterns": [
+        "^services.yml"
+    ]
+}

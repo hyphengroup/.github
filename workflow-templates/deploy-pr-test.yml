@@ -1,0 +1,66 @@
+name: KinD tests
+on:
+  pull_request:
+    branches: [ $default-branch ]
+jobs:
+  kind-tests:
+    runs-on: ubuntu-20.04
+    steps:
+      # https://github.com/actions/checkout/issues/416#issue-778885288
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.ref }}
+
+    - name: Fetch origin ${{ github.base_ref }}
+      run: git branch ${{ github.base_ref }} origin/${{ github.base_ref }}
+
+    - name: Test if any files of type SopsSecrets changed
+      id: secrets
+      run: |
+        echo "::set-output name=changed::false"
+        changed_files=`git --no-pager diff --name-only ${{ github.head_ref }} $(git merge-base ${{ github.head_ref }} ${{ github.base_ref }}) | grep -v '.github/' || echo ""`
+        for f in ${changed_files}; do
+          if grep -xq "kind: SopsSecret" $f ; then
+            echo "::set-output name=changed::true"
+            break
+          fi
+        done
+
+    - name: Set local bin
+      run: |
+        mkdir -p $HOME/.local/bin
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Download sops to local bin
+      if: ${{ steps.secrets.outputs.changed == 'true' }}
+      run: |
+        curl -Lo sops https://github.com/mozilla/sops/releases/download/${TAG}/sops-${TAG}.linux
+        chmod +x sops
+        cp "sops" $HOME/.local/bin
+      env:
+        TAG: "v3.6.1"
+
+    - name: Set up kind
+      if: ${{ steps.secrets.outputs.changed == 'true' }}
+      run: |
+        kind create cluster
+
+    - name: Validate changed SopsSecrets
+      if: ${{ steps.secrets.outputs.changed == 'true' }}
+      run: |
+        changed_files=`git --no-pager diff --name-only ${{ github.head_ref }} $(git merge-base ${{ github.head_ref }} ${{ github.base_ref }}) | grep -v '.github/'`
+        for f in ${changed_files}; do
+          if grep -xq "kind: SopsSecret" $f ; then
+            echo "testing SopsSecret ${f} ..."
+            sops -d --output-type=json $f | \
+              jq '.spec.secretTemplates[] | {"kind":"Secret","apiVersion":"v1","type":"opaque","metadata":{"name":.name},"stringData":.data}' | \
+              kubectl apply --dry-run=server -f -
+          else
+            echo "ignoring ${f} (not a SopsSecret)"
+          fi
+        done
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.APSE1_DEV_KMS_AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.APSE1_DEV_KMS_AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: "ap-southeast-1"
